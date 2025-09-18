@@ -1,81 +1,88 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-# Welcome to your Lovable project
-
-## Project info
-
-**URL**: https://lovable.dev/projects/a3f56056-c3c8-47ab-901d-79dbcd7c563a
-
-## How can I edit this code?
-
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/a3f56056-c3c8-47ab-901d-79dbcd7c563a) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
-
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/a3f56056-c3c8-47ab-901d-79dbcd7c563a) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
-=======
 # MediPlus
->>>>>>> a1d937e4d39aa863e3ddae6a4bac5bf5f3039cab
-=======
-# MediPlus
+
+## Project Info
+MediPlus is a health and wellness web platform designed to help users track their mental well-being in an engaging and accessible way.  
+We gamify mental health tracking by rewarding positive habits with progress toward nurturing a **Scarlet Minivet pet**, allowing users to level up and grow alongside their own well-being.  
+
+## Files Included
+- **Project Demo URL**: *to be added*  
+- **Pitch Video URL**: *to be added*  
+- **Pitch Deck (PDF)**
+- **MediPlus application’s codes**
+
+## Technologies Used
+This project is built with:  
+- **Vite** – Fast build tool and development environment  
+- **TypeScript** – Static typing for safer and more scalable code  
+- **React** – Component-based frontend framework  
+- **shadcn-ui** – Headless UI components for customization  
+- **Tailwind CSS** – Utility-first styling for responsive UI  
+
+### LLMs Used
+- **SEA-LION API**  
+  - **Model**: Gemma-SEA-LION-v4-27B-IT  
+  - **Usage**:  
+    - Multilingual UI translation  
+    - Context-aware question generation  
+    - Mental health chatbot (MindfulBot)  
+
+## Gamified Mental Health Journey
+We gamified mental health tracking with a **Scarlet Minivet pet companion** that grows as the user builds healthy habits:  
+
+- **Mood Tracker**  
+  - Log daily feelings  
+  - AI-powered emotional trend insights  
+
+- **Reflection Journal**  
+  - Guided journaling prompts  
+  - Streak rewards for consistency  
+  - AI summaries of reflective trends  
+
+- **Mental Health Overview**  
+  - AI-powered explainers, condition guides, coping strategies, and personalized suggestions  
+
+- **MindfulBot (AI)**  
+  - Supportive, non-diagnostic conversations  
+  - Recommends resources from curated guides  
+
+- **Resources**  
+  - Breathing tools, calming music, condition explainers, and helplines  
+
+- **Questions for Doctor**  
+  - AI-suggested questions to ask health professionals, based on user trends in mood, journal, and chatbot interactions  
+
+## Features
+- Gamified mental health tracking with progress-based pet growth  
+- Mood tracking with AI analysis  
+- Reflection journal with streaks and AI insights  
+- MindfulBot chatbot with safe, supportive boundaries  
+- Personalized doctor question suggestions  
+- Multi-language support for Southeast Asia  
+- Responsive mobile-first UI  
+
+## How to Run Locally
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/yourusername/mediplus.git
+   cd mediplus
+
+2. Install dependencies:
+    npm install
+
+3. Start the development server:
+    npm run dev
+
+4. Open your browser at http://localhost:XXXX
+
+## Contributors
+
+Niruba  Annriea Kichor Sagayaradje
+Vania Graciella Kwee
+Wong Poh Yee
+Joshe D/O Chantiramugan
+
+## Acknowledgments
+
+- SEA-LION API by AI Singapore for powering multilingual and AI features
+- Open source community for frameworks and tools that made this possible
 >>>>>>> a1d937e4d39aa863e3ddae6a4bac5bf5f3039cab
