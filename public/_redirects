@@ -1,0 +1,5 @@
+# Proxy SEA-LION API calls
+/api/sea-lion/*  https://api.sea-lion.ai/:splat  200
+
+# Handle React Router SPA fallback
+/*   /index.html   200
