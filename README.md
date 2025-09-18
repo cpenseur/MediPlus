@@ -5,8 +5,8 @@ MediPlus is a health and wellness web platform designed to help users track thei
 We gamify mental health tracking by rewarding positive habits with progress toward nurturing a **Scarlet Minivet pet**, allowing users to level up and grow alongside their own well-being.  
 
 ## Files Included
-- **Project Demo URL**: *to be added*  
-- **Pitch Video URL**: *to be added*  
+- **Project Demo URL**: https://mediplus-vjnp.netlify.app/ 
+- **Pitch Video URL**: https://youtu.be/Jfoa_gXUvJQ  
 - **Pitch Deck (PDF)**
 - **MediPlus application’s codes**
 
