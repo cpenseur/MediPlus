@@ -7,7 +7,7 @@ We gamify mental health tracking by rewarding positive habits with progress towa
 ## Files Included
 - **Project Demo URL**: https://mediplus-vjnp.netlify.app/ 
 - **Pitch Video URL**: https://youtu.be/Jfoa_gXUvJQ  
-- **Pitch Deck (PDF)**
+- **Pitch Deck (PDF)**: Team Null - MediPlus (Pitch deck).pdf
 - **MediPlus application’s codes**
 
 ## Technologies Used
