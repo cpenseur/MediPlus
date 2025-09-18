@@ -76,10 +76,10 @@ We gamified mental health tracking with a **Scarlet Minivet pet companion** that
 
 ## Contributors
 
-Niruba  Annriea Kichor Sagayaradje
-Vania Graciella Kwee
-Wong Poh Yee
-Joshe D/O Chantiramugan
+- Niruba  Annriea Kichor Sagayaradje
+- Vania Graciella Kwee
+- Wong Poh Yee
+- Joshe D/O Chantiramugan
 
 ## Acknowledgments
 
