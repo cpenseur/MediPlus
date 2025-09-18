@@ -1,4 +1,4 @@
-# MediPlus
+# MediPlus - Team Null
 
 ## Project Info
 MediPlus is a health and wellness web platform designed to help users track their mental well-being in an engaging and accessible way.  
@@ -75,7 +75,7 @@ We gamified mental health tracking with a **Scarlet Minivet pet companion** that
 4. Open your browser at http://localhost:XXXX
 
 ## Contributors
-
+Team Null
 - Niruba  Annriea Kichor Sagayaradje
 - Vania Graciella Kwee
 - Wong Poh Yee
