@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { useNavigate } from 'react-router-dom';
 import {
   Brain,
   TrendingUp,
@@ -29,11 +30,97 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Progress } from "@/components/ui/progress";
 import { ResponsiveContainer, AreaChart, Area, CartesianGrid, XAxis, YAxis, Tooltip } from "recharts";
 import { format, subDays, startOfWeek } from "date-fns";
+import { STORAGE_KEYS, readEntries } from "@/utils/wellnessStorage";
+const LEGACY_JOURNAL_KEY = "mh:journal"; // from JournalPage
 
 // If this import errors, your alias/path is wrong. Use a relative path from this file to src/assets.
 import overviewHeroImage from "../assets/Statistics-bro.svg";
 
 const PURPLE = "#717EF3";
+
+function normalizeAI(text: string) {
+  if (!text) return "";
+  let t = text.replace(/\r/g, "");
+
+  // remove bold/italic markers
+  t = t.replace(/\*\*(.*?)\*\*/g, "$1").replace(/\*(.*?)\*/g, "$1");
+
+  // convert list markers to a single style
+  t = t.replace(/^\s*[*\-•]\s+/gm, "• ");
+
+  // remove heading #'s and extra spaces
+  t = t.replace(/^[ \t]*#{1,6}[ \t]*/gm, "");
+  t = t.split("\n").map(s => s.trim()).filter(Boolean).join("\n");
+
+  return t;
+}
+
+function toHyphenBullets(block: string) {
+  if (!block) return "";
+  const lines = block
+    .split(/\n+/)
+    .map(l => l.replace(/^\s*(?:[-*•]|(\d+)[\.)])\s*/g, "").trim())
+    .filter(Boolean);
+  return lines.map(l => `- ${l}`).join("\n");
+}
+
+/* ---------------- Navigation Helper ---------------- */
+function goToResourceSection(
+  navigate: ReturnType<typeof useNavigate>,
+  resourceKey: string
+) {
+  const resource = RESOURCE_MAP[resourceKey];
+
+  if (!resource) return;
+
+  // If it's a condition → navigate to its page
+  if (
+    ["anxiety", "depression", "panic", "stress", "bipolar", "ptsd"].includes(resourceKey)
+  ) {
+    navigate(`/${resourceKey}`);
+    return;
+  }
+
+  // Else → go to resources page + scroll to section
+  navigate("/resources");
+  if (resource.section) {
+    setTimeout(() => {
+      const el = document.getElementById(resource.section!);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 200);
+  }
+}
+
+
+const RESOURCE_MAP: Record<string, { title: string; desc: string; section?: string }> = {
+  breathing: { title: "Breathing Exercises", desc: "Guided exercises to calm and relax your body.", section: "breathing" },
+  crisis: { title: "Crisis Support Hotlines", desc: "24/7 hotlines to get immediate support.", section: "crisis" },
+};
+
+
+
+
+function loadMood(): MoodEntry[] {
+  return (readEntries(STORAGE_KEYS.mood) as MoodEntry[]).slice().sort((a,b) =>
+    new Date(`${b.date}T${b.time || "00:00"}`).getTime() -
+    new Date(`${a.date}T${a.time || "00:00"}`).getTime()
+  );
+}
+
+function loadJournalMerged(): JournalEntry[] {
+  const a = (readEntries(STORAGE_KEYS.journal) as JournalEntry[]) || [];
+  const b = (readEntries(LEGACY_JOURNAL_KEY) as JournalEntry[]) || [];
+
+  // merge + dedupe by id (fallback to date+title for older seeds missing id)
+  const map = new Map<string, JournalEntry>();
+  [...a, ...b].forEach(e => {
+    const key = e.id || `j-${e.date}-${(e.title || "").slice(0,24)}`;
+    if (!map.has(key)) map.set(key, e);
+  });
+
+  return Array.from(map.values()).sort((x, y) => (x.date > y.date ? -1 : 1));
+}
+
 
 /* ============================= Types ============================= */
 
@@ -101,71 +188,48 @@ const emotions: Emotion[] = [
   { id: "hopeless", name: "Hopeless", emoji: "😞", color: "#6B7280", intensity: 1, category: "negative" },
 ];
 
-/* ============================= Mock generators ============================= */
 
-const generateMockMoodData = (): MoodEntry[] => {
-  const entries: MoodEntry[] = [];
-  const ids = emotions.map(e => e.id);
-  for (let i = 0; i < 30; i++) {
-    const date = format(subDays(new Date(), i), "yyyy-MM-dd");
-    const count = Math.floor(Math.random() * 4) + 2;
-    for (let j = 0; j < count; j++) {
-      const hour = Math.floor(Math.random() * 24);
-      const minute = Math.floor(Math.random() * 60);
-      const time = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
-      entries.push({
-        id: `${date}-${time}-${j}`,
-        emotion: ids[Math.floor(Math.random() * ids.length)] as EmotionType,
-        date,
-        time,
-        notes: Math.random() > 0.6 ? "Brief note about this mood" : undefined,
-        triggers: Math.random() > 0.7 ? ["work", "sleep", "exercise"] : undefined,
-      });
-    }
-  }
-  return entries.sort(
-    (a, b) =>
-      new Date(`${b.date}T${b.time}:00`).getTime() - new Date(`${a.date}T${a.time}:00`).getTime()
-  );
-};
 
-const generateMockJournalData = (): JournalEntry[] => {
-  return [
-    {
-      id: "1",
-      date: "2025-08-15",
-      title: "Morning Reflections",
-      content: "Started the day with meditation. Feeling grateful for small moments of peace.",
-      mood: "good",
-      tags: ["gratitude", "meditation", "peace"],
-    },
-    {
-      id: "2",
-      date: "2025-08-14",
-      title: "Challenging Day",
-      content: "Work was overwhelming today. Practiced breathing exercises which helped.",
-      mood: "low",
-      tags: ["stress", "work", "breathing"],
-    },
-    {
-      id: "3",
-      date: "2025-08-13",
-      title: "Connection and Joy",
-      content: "Spent quality time with friends. These moments remind me what matters.",
-      mood: "great",
-      tags: ["friendship", "joy", "connection"],
-    },
-  ];
-};
+
 
 /* ============================= Component ============================= */
 
 const MentalHealthOverview: React.FC = () => {
-  const [moodEntries] = useState<MoodEntry[]>(generateMockMoodData());
-  const [journalEntries] = useState<JournalEntry[]>(generateMockJournalData());
+  const [moodEntries, setMoodEntries] = useState<MoodEntry[]>([]);
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
+
+  const navigate = useNavigate();
+
   const [timeframe, setTimeframe] = useState<"week" | "month" | "quarter">("month");
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  useEffect(() => {
+    // initial load
+    setMoodEntries(loadMood());
+    setJournalEntries(loadJournalMerged());
+
+    // react to writes from wellnessStorage
+    const onUpdated = (e: any) => {
+      if (e?.detail?.key === STORAGE_KEYS.mood) setMoodEntries(loadMood());
+      if (e?.detail?.key === STORAGE_KEYS.journal) setJournalEntries(loadJournalMerged());
+    };
+    window.addEventListener("wellness:entries-updated", onUpdated as EventListener);
+
+    // also refresh when tab/page regains focus
+    const onFocus = () => {
+      setMoodEntries(loadMood());
+      setJournalEntries(loadJournalMerged());
+    };
+    window.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      window.removeEventListener("wellness:entries-updated", onUpdated as EventListener);
+      window.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
 
   const analytics = useMemo(() => {
     const now = new Date();
@@ -280,96 +344,109 @@ const MentalHealthOverview: React.FC = () => {
 
   const generateAnalysis = async () => {
     setIsAnalyzing(true);
+  
     try {
       const moodSummary = analytics.emotionDistribution
         .slice(0, 5)
         .map(e => `${e.name}: ${e.value} times`)
         .join(", ");
-
+  
       const journalSummary = journalEntries
         .slice(0, 3)
         .map(e => `${e.date}: ${e.mood} mood - ${e.title}`)
         .join("; ");
-
+  
       const dataContext = `
-TIMEFRAME: ${timeframe}
-WELLNESS SCORE: ${analytics.wellnessScore}/100
-MOOD BREAKDOWN: ${analytics.positivePercentage}% positive, ${analytics.neutralPercentage}% neutral, ${analytics.negativePercentage}% negative
-TOP EMOTIONS: ${moodSummary}
-JOURNAL AVERAGE: ${analytics.avgJournalMood}/10
-TOP TRIGGERS: ${analytics.topTriggers.map(t => t.trigger).join(", ")}
-RECENT JOURNAL ENTRIES: ${journalSummary}
-TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournalEntries} journal entries
-`.trim();
-
-      // Call your backend proxy. If you haven't built it yet, this will 404 and we'll fall back.
-      const response = await fetch("/api/analysis", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          payload: {
-            // Keep your server free to swap models/providers safely
-            model: "aisingapore/Llama-SEA-LION-v3-70B-IT",
-            temperature: 0.7,
-            max_completion_tokens: 800,
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are a compassionate mental health analyst. Provide four sections: 1) INSIGHTS, 2) SUGGESTIONS (3-5 bullets), 3) PATTERNS, 4) RECOMMENDATIONS. Be concise, supportive, and actionable.",
-              },
-              { role: "user", content: `Analyze this mental health data:\n\n${dataContext}` },
-            ],
+  TIMEFRAME: ${timeframe}
+  WELLNESS SCORE: ${analytics.wellnessScore}/100
+  MOOD BREAKDOWN: ${analytics.positivePercentage}% positive, ${analytics.neutralPercentage}% neutral, ${analytics.negativePercentage}% negative
+  TOP EMOTIONS: ${moodSummary}
+  JOURNAL AVERAGE: ${analytics.avgJournalMood}/10
+  TOP TRIGGERS: ${analytics.topTriggers.map(t => t.trigger).join(", ")}
+  RECENT JOURNAL ENTRIES: ${journalSummary}
+  TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournalEntries} journal entries
+  `.trim();
+  
+      // --- AI call (client-side demo only; keys in client are unsafe) ---
+      const AI_ENDPOINT = "https://api.sea-lion.ai/v1/chat/completions";
+      const AI_KEY =
+        (import.meta as any)?.env?.VITE_SEALION_KEY ||
+        "sk-Y8L5mwaeYGh4PSl2xXDbAA"; 
+  
+      const payload = {
+        model: "aisingapore/Gemma-SEA-LION-v4-27B-IT", // safer default
+        temperature: 0.7,
+        max_tokens: 800, // <- use max_tokens
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a compassionate mental health analyst. Return PLAIN TEXT ONLY (no markdown). Output EXACTLY four sections in this strict format:\n\nINSIGHTS:\n- item 1\n- item 2\n\nSUGGESTIONS:\n- suggestion 1\n- suggestion 2\n\nPATTERNS:\n- pattern 1\n- pattern 2\n\nRECOMMENDATIONS:\n- recommendation 1\n- recommendation 2\n\nDo not include section numbers (1,2,3,4) or repeat headings. Do not include extra text outside these sections."
           },
-        }),
-      });
+          { role: "user", content: `Analyze this mental health data:\n\n${dataContext}` },
+        ],
+      };
+  
+      let content = "";
+      try {
+        const resp = await fetch(AI_ENDPOINT, {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            Authorization: `Bearer ${AI_KEY}`,
+          },
+          body: JSON.stringify(payload),
+        });
+  
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "(no body)");
+          console.error("[AI] HTTP error", resp.status, text);
+          throw new Error(`AI ${resp.status}`);
+        }
+  
+        const json = await resp.json();
+        content = json?.choices?.[0]?.message?.content?.trim() || "";
+      } catch (err) {
+        // Network/CORS/Key errors land here
+        console.warn("[AI] request failed, using fallback:", err);
+        content = "";
+      }
 
-      if (!response.ok) throw new Error(`AI error ${response.status}`);
-      const data = await response.json();
-      const content: string = data?.choices?.[0]?.message?.content || "";
+      content = normalizeAI(content);
 
-      // Robust section extraction
+      const get = (key: string) => normalizeAI(section(key) || "");
+
+  
+      // Extract sections if present; otherwise fallback copy
       const section = (key: string) => {
-        const m = content.match(new RegExp(`${key}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*\\w+\\s*:|$)`, "i"));
-        return m?.[1]?.trim();
+        const re = new RegExp(`${key}\\s*:?\\s*([\\s\\S]*?)(?=\\n\\s*[A-Z][A-Z ]{2,}:|$)`, "i");
+        return content.match(re)?.[1]?.trim();
       };
 
       const result: AnalysisResult = {
-        insights: section("INSIGHTS") || "Your data shows consistent tracking and a healthy mix of positive emotions. Keep it up!",
-        suggestions:
-          section("SUGGESTIONS") ||
-          "- Try a 5-minute breathing exercise after lunch\n- Log one gratitude item nightly\n- Take a 10-minute walk when stressed",
-        patterns:
-          section("PATTERNS") ||
-          "Positive moods cluster on days with social activity; mild dips appear mid-week and correlate with 'work' trigger.",
-        recommendations:
-          section("RECOMMENDATIONS") ||
-          "Build a steady routine: 7h sleep target, 3x/week light exercise, weekly check-in on triggers, and continue journaling.",
+        insights: get("INSIGHTS") || "Consistent tracking with a mostly balanced mood profile...",
+        suggestions: toHyphenBullets(get("SUGGESTIONS")) ||
+          "- Try a 5-minute breathing break after lunch\n- Add one mid-week joy activity\n- Short stretch in the afternoon\n- Journal a quick gratitude on stressful days",
+        patterns: get("PATTERNS") || "Positives cluster on socially active days...",
+        recommendations: get("RECOMMENDATIONS") || "Keep the logging habit; aim for 7h sleep...",
       };
+  
 
+  
       setAnalysisResult(result);
-    } catch (error) {
-      // Fallback if backend not set up or network blocked
-      setAnalysisResult({
-        insights:
-          "Consistent logging with a generally positive trend. Your wellness score suggests good balance with room for small optimizations.",
-        suggestions:
-          "- Do a 4-7-8 breath before starting work\n- Add one joyful activity mid-week\n- Brief afternoon stretch break\n- Journal 3 prompts on stressful days",
-        patterns:
-          "Top triggers include work/sleep. Positive moods appear on socially active days; slight dips occur after poor sleep.",
-        recommendations:
-          "Keep the habit strong: weekly reflection on triggers, schedule short recovery windows, maintain sleep hygiene, and consider light exercise 3x/week.",
-      });
     } finally {
       setIsAnalyzing(false);
     }
   };
+  
 
   useEffect(() => {
-    // Auto-run on first paint and when timeframe changes
-    generateAnalysis();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeframe]);
+    const t = setTimeout(() => generateAnalysis(), 150);
+    return () => clearTimeout(t);
+  }, [timeframe, moodEntries, journalEntries]);
+
+
 
   /* ============================= Render ============================= */
 
@@ -442,7 +519,7 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
         <div className="max-w-7xl mx-auto px-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
             {/* Wellness Score */}
-            <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+            <Card className="bg-white border-2" style={{ backgroundColor: "#E8EAFF", borderColor: `${PURPLE}33` }}>
               <CardHeader className="text-center">
                 <CardTitle className="flex items-center justify-center gap-2">
                   <Target className="w-5 h-5" style={{ color: PURPLE }} />
@@ -476,10 +553,10 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
             </Card>
 
             {/* Mood Balance */}
-            <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+            <Card className="bg-white border-2" style={{ backgroundColor: "#FFE5B2", borderColor: `${PURPLE}33` }}>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Heart className="w-4 h-4" style={{ color: PURPLE }} />
+                <CardTitle className="flex items-center justify-center gap-2">
+                  <Heart className="w-5 h-5" style={{ color: PURPLE }} />
                   Mood Balance
                 </CardTitle>
               </CardHeader>
@@ -509,24 +586,24 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
             </Card>
 
             {/* Activity Summary */}
-            <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+            <Card className="bg-white border-2" style={{ backgroundColor: "#FCD4D2", borderColor: `${PURPLE}33` }}>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Activity className="w-4 h-4" style={{ color: PURPLE }} />
+              <CardTitle className="flex items-center justify-center gap-2">
+                  <Activity className="w-5 h-5" style={{ color: PURPLE }} />
                   Activity Summary
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">Mood Logs</span>
+                  <span className="text-sm font-bold text-gray-600">Mood Logs</span>
                   <Badge variant="secondary">{analytics.totalMoodEntries}</Badge>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">Journal Entries</span>
+                  <span className="text-sm font-bold text-gray-600">Journal Entries</span>
                   <Badge variant="secondary">{analytics.totalJournalEntries}</Badge>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">Avg Journal Mood</span>
+                  <span className="text-sm font-bold text-gray-600">Avg Journal Mood</span>
                   <Badge variant="outline" style={{ borderColor: PURPLE, color: PURPLE }}>
                     {analytics.avgJournalMood.toFixed(1)}/10
                   </Badge>
@@ -535,23 +612,25 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
             </Card>
 
             {/* Top Trigger */}
-            <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+            <Card className="bg-white border-2" style={{ backgroundColor: "#F6BDBB", borderColor: `${PURPLE}33` }}>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <AlertTriangle className="w-4 h-4" style={{ color: PURPLE }} />
+                <CardTitle className="flex items-center justify-center gap-2">
+                  <AlertTriangle className="w-5 h-5" style={{ color: PURPLE }} />
                   Key Trigger
                 </CardTitle>
               </CardHeader>
               <CardContent>
+                <br></br>
                 {analytics.topTriggers.length > 0 ? (
                   <div className="text-center">
-                    <div className="text-2xl font-bold capitalize mb-2" style={{ color: PURPLE }}>
+                    <div className="text-3xl font-bold capitalize mb-2" style={{ color: PURPLE }}>
                       {analytics.topTriggers[0].trigger}
                     </div>
-                    <p className="text-sm text-gray-600">Appeared {analytics.topTriggers[0].count} times</p>
+                    <br></br>
+                    <p className="text-xl font-bold text-gray-600">Appeared {analytics.topTriggers[0].count} times</p>
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500 text-center">No triggers recorded</p>
+                  <p className="text-xl text-gray-500 text-center">No triggers recorded</p>
                 )}
               </CardContent>
             </Card>
@@ -635,13 +714,13 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               {/* Insights & Patterns */}
               <div className="space-y-6">
-                <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+                <Card className="border-2" style={{ backgroundColor: "#CEE2E0", borderColor: `${PURPLE}33` }}>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <Lightbulb className="w-5 h-5" style={{ color: PURPLE }} />
                       Key Insights
                     </CardTitle>
-                    <CardDescription>Patterns discovered in your data</CardDescription>
+                    <CardDescription >Patterns discovered in your data</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="prose prose-sm max-w-none">
@@ -650,7 +729,7 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
                   </CardContent>
                 </Card>
 
-                <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+                <Card className="border-2" style={{ backgroundColor: "#CEE2E0", borderColor: `${PURPLE}33` }}>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <Activity className="w-5 h-5" style={{ color: PURPLE }} />
@@ -668,7 +747,7 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
 
               {/* Suggestions & Recommendations */}
               <div className="space-y-6">
-                <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+                <Card className=" border-2" style={{ backgroundColor: "#CEE2E0", borderColor: `${PURPLE}33` }}>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <CheckCircle className="w-5 h-5" style={{ color: PURPLE }} />
@@ -683,7 +762,7 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
                   </CardContent>
                 </Card>
 
-                <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+                <Card className=" border-2" style={{ backgroundColor: "#CEE2E0", borderColor: `${PURPLE}33` }}>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <Target className="w-5 h-5" style={{ color: PURPLE }} />
@@ -724,9 +803,15 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-gray-600 mb-4">Practice 4-7-8 breathing, box breathing, or belly breathing techniques.</p>
-                <Button variant="outline" className="w-full" style={{ borderColor: PURPLE, color: PURPLE }} asChild>
-                  <Link to="/resources">Start Exercise</Link>
+
+                <Button
+                  className="w-full" style={{ borderColor: PURPLE, color: PURPLE }}
+                  variant="outline"
+                  onClick={() => goToResourceSection(navigate, RESOURCE_MAP["breathing"].section)}
+                >
+                  Start Exercise
                 </Button>
+
               </CardContent>
             </Card>
 
@@ -788,7 +873,7 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
               <CardContent>
                 <p className="text-sm text-gray-600 mb-4">Take a moment to check in with your emotions and log your current mood.</p>
                 <Button variant="outline" className="w-full" style={{ borderColor: PURPLE, color: PURPLE }} asChild>
-                  <Link to="/moodtracker">Log Mood</Link>
+                  <Link to="/MoodTracker">Log Mood</Link>
                 </Button>
               </CardContent>
             </Card>
@@ -828,11 +913,17 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
                 </div>
               </CardHeader>
               <CardContent>
-                <p className="text-sm text-gray-600 mb-4">24/7 crisis hotlines and emergency mental health resources.</p>
-                <Button variant="outline" className="w-full border-red-300 text-red-600 hover:bg-red-50" asChild>
-                  <Link to="/resources">Get Help Now</Link>
+                <p className="text-sm text-gray-600 mb-4">
+                  24/7 crisis hotlines and emergency mental health resources.
+                </p>
+                <Button
+                  className="w-full border-red-300 text-red-600 hover:bg-red-50"
+                  variant="outline"
+                  onClick={() => goToResourceSection(navigate, RESOURCE_MAP["crisis"].section)}
+                >
+                  Get Help Now
                 </Button>
-              </CardContent>
+            </CardContent>
             </Card>
           </div>
         </div>
@@ -841,7 +932,7 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
       {/* Progress */}
       <section className="py-8">
         <div className="max-w-7xl mx-auto px-4">
-          <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+          <Card className="bg-white border-2" style={{ backgroundColor: "#FCD4D2", borderColor: `${PURPLE}33` }}>
             <CardHeader className="text-center">
               <CardTitle className="flex items-center justify-center gap-2">
                 <Star className="w-5 h-5" style={{ color: PURPLE }} />
@@ -855,21 +946,21 @@ TOTAL ENTRIES: ${analytics.totalMoodEntries} mood logs, ${analytics.totalJournal
                   <div className="text-3xl font-bold mb-2" style={{ color: PURPLE }}>
                     {analytics.totalMoodEntries + analytics.totalJournalEntries}
                   </div>
-                  <p className="text-gray-600">Total Check-ins</p>
+                  <p className="font-bold text-gray-600">Total Check-ins</p>
                   <p className="text-sm text-gray-500 mt-1">Keep building the habit</p>
                 </div>
                 <div>
                   <div className="text-3xl font-bold mb-2" style={{ color: PURPLE }}>
                     {Math.max(1, Math.floor(analytics.totalMoodEntries / 7))}
                   </div>
-                  <p className="text-gray-600">Weeks Tracking</p>
+                  <p className="font-bold text-gray-600">Weeks Tracking</p>
                   <p className="text-sm text-gray-500 mt-1">Consistency is key</p>
                 </div>
                 <div>
                   <div className="text-3xl font-bold mb-2" style={{ color: PURPLE }}>
                     {analytics.wellnessScore}%
                   </div>
-                  <p className="text-gray-600">Wellness Score</p>
+                  <p className="font-bold text-gray-600">Wellness Score</p>
                   <p className="text-sm text-gray-500 mt-1">You're doing great</p>
                 </div>
               </div>

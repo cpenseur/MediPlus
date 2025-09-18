@@ -1,4 +1,12 @@
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  STORAGE_KEYS,
+  readEntries,
+  writeEntries,
+  seedStreakFrom,
+  uniqueDaySet,
+  computeStreak,
+} from "@/utils/wellnessStorage";
 import {
   Calendar,
   Clock,
@@ -11,7 +19,9 @@ import {
   Sparkles,
   Target,
   Plus,
+  Trophy,
 } from "lucide-react";
+
 import {
   Card,
   CardContent,
@@ -39,149 +49,213 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+
 import {
   LineChart,
   Line,
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip,          
+  Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { format, subDays } from "date-fns";
 
+import { format, subDays, isWithinInterval, startOfWeek, endOfWeek, parseISO } from "date-fns";
 import moodHeroImage from "@/assets/moodtracking.svg";
+
+const SEED_KEY = "mood_seed_version";
+const CURRENT_SEED_VERSION = "oct-judging-v1";
+
+// Lightweight local note pool (safe for client)
+const NOTE_POOL = [
+  "Short walk helped",
+  "Work was heavy but manageable",
+  "Coffee chat lifted mood",
+  "Music break eased tension",
+  "Slept late, felt groggy",
+  "Breathing exercise calmed me",
+];
 
 const PURPLE = "#717EF3";
 
-// ---------- SEA-LION (optional for AI suggest mood) ----------
+import { addDays, differenceInCalendarDays } from "date-fns";
+
+function seedDailyMoodRange(startISO: string, includeToday = true) {
+  // Use your existing utils to read/write
+  const existing = readEntries(STORAGE_KEYS.mood) as any[];
+
+  const start = new Date(startISO + "T00:00:00");
+  const today = new Date();
+  const end = includeToday ? today : addDays(today, -1);
+  const total = differenceInCalendarDays(end, start) + 1;
+  if (total <= 0) return;
+
+  // Build a map keyed by date so each day gets at least one entry
+  const byDate = new Map<string, any[]>();
+  for (const e of existing) {
+    if (!byDate.has(e.date)) byDate.set(e.date, []);
+    byDate.get(e.date)!.push(e);
+  }
+
+  const ids = EMOTIONS.map(e => e.id);
+
+  const next = [...existing];
+  for (let i = 0; i < total; i++) {
+    const d = addDays(start, i);
+    const iso = format(d, "yyyy-MM-dd");
+
+    // If there’s already at least one entry that day, skip making another
+    if (byDate.get(iso)?.length) continue;
+
+    // Random but stable-ish: vary emotion + time
+    const emotion = ids[Math.floor(Math.random() * ids.length)];
+    const hour = 8 + Math.floor(Math.random() * 10); // 08:00–17:59
+    const minute = Math.floor(Math.random() * 60);
+    const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+
+    next.push({
+      id: `m-${iso}-${time}`,
+      emotion,
+      date: iso,
+      time,
+      notes: NOTE_POOL[Math.floor(Math.random() * NOTE_POOL.length)],
+      triggers: Math.random() < 0.5 ? ["work", "sleep", "exercise"].filter(() => Math.random() < 0.5) : undefined,
+    });
+  }
+
+  // newest first
+  next.sort(
+    (a, b) =>
+      new Date(`${b.date} ${b.time}`).getTime() -
+      new Date(`${a.date} ${a.time}`).getTime()
+  );
+
+  writeEntries(STORAGE_KEYS.mood, next);
+}
+
+
+/* ===========================
+   AI (client-side demo)
+   ⚠️ For dev only — don’t ship secrets in client.
+=========================== */
 const AI_ENDPOINT = "https://api.sea-lion.ai/v1/chat/completions";
 const AI_MODEL = "aisingapore/Llama-SEA-LION-v3-70B-IT";
-// Put your dev key here if you insist on client-side during local dev.
-// In production, proxy this on your server!
-const AI_KEY = "sk-Y8L5mwaeYGh4PSl2xXDbAA";
+// Put your key here for local testing only:
+const AI_KEY = "sk-TSbEBjqQN9HKMcutANxL5A";
 
-// ---------- Emotion Types ----------
+/* ===========================
+   Types / Catalog
+=========================== */
 type EmotionType =
   | "ecstatic" | "joyful" | "content" | "peaceful" | "optimistic" | "grateful"
   | "neutral" | "bored" | "tired"
   | "stressed" | "anxious" | "worried" | "frustrated" | "angry" | "sad" | "lonely" | "overwhelmed" | "hopeless";
 
-interface Emotion {
+interface EmotionMeta {
   id: EmotionType;
   name: string;
   emoji: string;
-  color: string;
-  intensity: number; // 1-10 scale
+  intensity: number; // 1–10
   category: "positive" | "neutral" | "negative";
 }
 
-const emotions: Emotion[] = [
-  { id: "ecstatic", name: "Ecstatic", emoji: "🤩", color: "hsl(var(--mood-ecstatic))", intensity: 10, category: "positive" },
-  { id: "joyful", name: "Joyful", emoji: "😄", color: "hsl(var(--mood-joyful))", intensity: 9, category: "positive" },
-  { id: "content", name: "Content", emoji: "😊", color: "hsl(var(--mood-content))", intensity: 8, category: "positive" },
-  { id: "peaceful", name: "Peaceful", emoji: "😌", color: "hsl(var(--mood-peaceful))", intensity: 7, category: "positive" },
-  { id: "optimistic", name: "Optimistic", emoji: "🙂", color: "hsl(var(--mood-optimistic))", intensity: 7, category: "positive" },
-  { id: "grateful", name: "Grateful", emoji: "🙏", color: "hsl(var(--mood-grateful))", intensity: 8, category: "positive" },
-
-  { id: "neutral", name: "Neutral", emoji: "😐", color: "hsl(var(--mood-neutral))", intensity: 5, category: "neutral" },
-  { id: "bored", name: "Bored", emoji: "😑", color: "hsl(var(--mood-bored))", intensity: 4, category: "neutral" },
-  { id: "tired", name: "Tired", emoji: "😴", color: "hsl(var(--mood-tired))", intensity: 4, category: "neutral" },
-
-  { id: "stressed", name: "Stressed", emoji: "😰", color: "hsl(var(--mood-stressed))", intensity: 3, category: "negative" },
-  { id: "anxious", name: "Anxious", emoji: "😟", color: "hsl(var(--mood-anxious))", intensity: 2, category: "negative" },
-  { id: "worried", name: "Worried", emoji: "😕", color: "hsl(var(--mood-worried))", intensity: 3, category: "negative" },
-  { id: "frustrated", name: "Frustrated", emoji: "😤", color: "hsl(var(--mood-frustrated))", intensity: 2, category: "negative" },
-  { id: "angry", name: "Angry", emoji: "😡", color: "hsl(var(--mood-angry))", intensity: 1, category: "negative" },
-  { id: "sad", name: "Sad", emoji: "😢", color: "hsl(var(--mood-sad))", intensity: 2, category: "negative" },
-  { id: "lonely", name: "Lonely", emoji: "😔", color: "hsl(var(--mood-lonely))", intensity: 2, category: "negative" },
-  { id: "overwhelmed", name: "Overwhelmed", emoji: "😵", color: "hsl(var(--mood-overwhelmed))", intensity: 1, category: "negative" },
-  { id: "hopeless", name: "Hopeless", emoji: "😞", color: "hsl(var(--mood-hopeless))", intensity: 1, category: "negative" },
+const EMOTIONS: EmotionMeta[] = [
+  { id: "ecstatic", name: "Ecstatic", emoji: "🤩", intensity: 10, category: "positive" },
+  { id: "joyful", name: "Joyful", emoji: "😄", intensity: 9, category: "positive" },
+  { id: "content", name: "Content", emoji: "😊", intensity: 8, category: "positive" },
+  { id: "peaceful", name: "Peaceful", emoji: "😌", intensity: 7, category: "positive" },
+  { id: "optimistic", name: "Optimistic", emoji: "🙂", intensity: 7, category: "positive" },
+  { id: "grateful", name: "Grateful", emoji: "🙏", intensity: 8, category: "positive" },
+  { id: "neutral", name: "Neutral", emoji: "😐", intensity: 5, category: "neutral" },
+  { id: "bored", name: "Bored", emoji: "😑", intensity: 4, category: "neutral" },
+  { id: "tired", name: "Tired", emoji: "😴", intensity: 4, category: "neutral" },
+  { id: "stressed", name: "Stressed", emoji: "😰", intensity: 3, category: "negative" },
+  { id: "anxious", name: "Anxious", emoji: "😟", intensity: 2, category: "negative" },
+  { id: "worried", name: "Worried", emoji: "😕", intensity: 3, category: "negative" },
+  { id: "frustrated", name: "Frustrated", emoji: "😤", intensity: 2, category: "negative" },
+  { id: "angry", name: "Angry", emoji: "😡", intensity: 1, category: "negative" },
+  { id: "sad", name: "Sad", emoji: "😢", intensity: 2, category: "negative" },
+  { id: "lonely", name: "Lonely", emoji: "😔", intensity: 2, category: "negative" },
+  { id: "overwhelmed", name: "Overwhelmed", emoji: "😵", intensity: 1, category: "negative" },
+  { id: "hopeless", name: "Hopeless", emoji: "😞", intensity: 1, category: "negative" },
 ];
 
 interface MoodEntry {
   id: string;
   emotion: EmotionType;
-  date: string;
-  time: string;
+  date: string;   // yyyy-MM-dd
+  time: string;   // HH:mm
   notes?: string;
   triggers?: string[];
 }
 
-// ---------- Sample notes to replace the old placeholder ----------
-const SAMPLE_NOTES = [
-  "Felt calm after a short walk",
-  "Energy dipped post-lunch",
-  "Better after talking to a friend",
-  "Slept late, a bit groggy",
-  "Work felt intense today",
-  "Did a 5-min breathing session",
-  "Morning coffee helped",
-  "Had a great conversation",
-  "Workout made me feel better",
-  "Music lifted my spirits",
-  "Feeling grateful today",
-  "Challenging day at work",
-];
+/* ===========================
+   Seed v1 (reseed when you change this)
+=========================== */
+const MOOD_SEED_VERSION = "mood-seed-v1";
 
-// ---------- Mock data generator (60 days, more entries) ----------
-const generateMockData = (): MoodEntry[] => {
-  const entries: MoodEntry[] = [];
-  const ids = emotions.map(e => e.id);
-  for (let i = 0; i < 60; i++) {
-    const date = format(subDays(new Date(), i), "yyyy-MM-dd");
-    const count = Math.floor(Math.random() * 6) + 2; // 2-7 entries per day
-    for (let j = 0; j < count; j++) {
-      const hour = Math.floor(Math.random() * 24);
-      const minute = Math.floor(Math.random() * 60);
-      const time = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
-      entries.push({
-        id: `${date}-${time}-${j}`,
-        emotion: ids[Math.floor(Math.random() * ids.length)] as EmotionType,
-        date,
-        time,
-        notes: Math.random() > 0.6 ? SAMPLE_NOTES[Math.floor(Math.random() * SAMPLE_NOTES.length)] : undefined,
-        triggers: Math.random() > 0.7 ? ["work", "sleep", "exercise"] : undefined,
-      });
-    }
-  }
-  return entries.sort(
-    (a, b) =>
-      new Date(`${b.date} ${b.time}`).getTime() -
-      new Date(`${a.date} ${a.time}`).getTime()
-  );
-};
-
+/* ===========================
+   Component
+=========================== */
 const MoodTrackingPage: React.FC = () => {
-  const [entries, setEntries] = useState<MoodEntry[]>(generateMockData());
+  // Load from localStorage after (possible) seeding
+  const [entries, setEntries] = useState<MoodEntry[]>([]);
 
-  // Hero: log mood dialog
+  // Seed when version changes or storage empty
+  useEffect(() => {
+    const seededVersion = localStorage.getItem(SEED_KEY);
+    const alreadyHasData = readEntries(STORAGE_KEYS.mood).length > 0;
+
+    if (seededVersion !== CURRENT_SEED_VERSION || !alreadyHasData) {
+      // (Optional) wipe mood data to force a clean seed
+      localStorage.removeItem(STORAGE_KEYS.mood);
+
+      // Seed from Sep 1 to *today* (so October has entries)
+      seedDailyMoodRange("2025-09-01", true);
+
+      localStorage.setItem(SEED_KEY, CURRENT_SEED_VERSION);
+    }
+
+    // Load into state
+    setEntries(readEntries(STORAGE_KEYS.mood) as MoodEntry[]);
+  }, []);
+
+  // Persist whenever entries change (for new logs you add via UI)
+  useEffect(() => {
+    writeEntries(STORAGE_KEYS.mood, entries);
+  }, [entries]);
+
+
+
+  
+
+
   const [selectedEmotion, setSelectedEmotion] = useState<EmotionType | null>(null);
   const [logNotes, setLogNotes] = useState("");
 
-  // Charts
+  // Top analytics controls
   const [viewMode, setViewMode] = useState<"daily" | "weekly" | "monthly">("weekly");
 
-  // AI summary (local demo)
+  // Entries “Browse” filters
+  const [entriesFilterType, setEntriesFilterType] = useState<"all" | "day" | "month">("all");
+  const [entriesFilterDay, setEntriesFilterDay] = useState<string>("");
+  const [entriesFilterMonth, setEntriesFilterMonth] = useState<string>("");
+
+  // AI summary (based on entries)
   const [aiSummary, setAiSummary] = useState("");
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
 
-  // Assessment
+  // Assessment (optional helper)
   const [showAssessment, setShowAssessment] = useState(false);
   const [assessmentAnswers, setAssessmentAnswers] = useState<number[]>([]);
-
-  // NEW: result modal
-  const [showAssessmentResult, setShowAssessmentResult] = useState(false);
-  const [assessmentResult, setAssessmentResult] = useState<EmotionType | null>(null);
-
   const assessmentQuestions = [
     {
       question: "How has your energy level been lately?",
       options: [
         { text: "Very high, I feel energetic", emotions: ["ecstatic", "joyful"] },
-        { text: "Good, I have steady energy", emotions: ["content", "optimistic"] },
-        { text: "Average, some ups and downs", emotions: ["neutral", "bored"] },
-        { text: "Low, I feel drained", emotions: ["tired", "sad"] },
+        { text: "Good, steady energy", emotions: ["content", "optimistic"] },
+        { text: "Average, ups and downs", emotions: ["neutral", "bored"] },
+        { text: "Low, drained", emotions: ["tired", "sad"] },
         { text: "Very low, exhausted", emotions: ["overwhelmed", "hopeless"] },
       ],
     },
@@ -207,111 +281,156 @@ const MoodTrackingPage: React.FC = () => {
     },
   ];
 
-  // Single "AI-Generate Mood" handler
-  const handleGenerateMoodFromAssessment = () => {
-    // Collect suggested emotions from chosen answers
-    const suggested: EmotionType[] = [];
-    assessmentAnswers.forEach((ansIdx, qIdx) => {
-      const opt = assessmentQuestions[qIdx].options[ansIdx];
-      if (opt) suggested.push(...(opt.emotions as EmotionType[]));
-    });
+  // ---------- Deterministic seed for Sep 01 → Sep 16 (no entry today) ----------
+  const seedSep1to16 = (): MoodEntry[] => {
+    // Adjust to your current year
+    const year = new Date().getFullYear();
+    const start = new Date(year, 8, 1); // Sep 1
+    const days = 17;
 
-    if (!suggested.length) {
-      // No answers selected
-      setAssessmentResult(null);
-      setShowAssessmentResult(false);
-      return;
+    const ids = EMOTIONS.map(e => e.id);
+    const pick = (i: number) => ids[i % ids.length] as EmotionType;
+
+    const arr: MoodEntry[] = [];
+    for (let i = 0; i < days; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const date = format(d, "yyyy-MM-dd");
+      const time = `0${8 + (i % 3)}:0${i % 6}`.slice(-5);
+      arr.push({
+        id: `seed-${date}-${time}`,
+        emotion: pick(i),
+        date,
+        time,
+        notes: i % 2 ? "Short walk helped" : "Work was heavy but manageable",
+      });
     }
-
-    // Find most frequent suggested emotion
-    const score = suggested.reduce((acc, id) => {
-      acc[id] = (acc[id] || 0) + 1;
-      return acc;
-    }, {} as Record<EmotionType, number>);
-    const top = Object.entries(score).sort(([, a], [, b]) => b - a)[0]?.[0] as EmotionType;
-
-    setAssessmentResult(top || null);
-    setShowAssessment(false);         // close the form dialog
-    setShowAssessmentResult(true);    // open the popup
+    // Newest first
+    return arr.sort(
+      (a, b) =>
+        new Date(`${b.date} ${b.time}`).getTime() -
+        new Date(`${a.date} ${a.time}`).getTime()
+    );
   };
 
-  // --- Entries filter (Day / Month / All) ---
-  const [entriesFilterType, setEntriesFilterType] = useState<"all" | "day" | "month">("all");
-  const [entriesFilterDay, setEntriesFilterDay] = useState<string>("");     // yyyy-MM-dd
-  const [entriesFilterMonth, setEntriesFilterMonth] = useState<string>(""); // yyyy-MM
 
-  const filteredEntries = useMemo(() => {
-    if (entriesFilterType === "all") return entries;
+    // -------------------- STREAK / WEEK / BADGES --------------------
+    const uniqueDaySet = useMemo(() => {
+      const s = new Set<string>();
+      for (const e of entries) s.add(e.date);
+      return s;
+    }, [entries]);
 
-    if (entriesFilterType === "day" && entriesFilterDay) {
-      return entries.filter(e => e.date === entriesFilterDay);
-    }
-    if (entriesFilterType === "month" && entriesFilterMonth) {
-      return entries.filter(e => e.date.startsWith(entriesFilterMonth));
-    }
-    return entries;
-  }, [entries, entriesFilterType, entriesFilterDay, entriesFilterMonth]);
+    const computeStreak = (upTo: Date) => {
+      let streak = 0;
+      let cur = new Date(upTo);
+      while (uniqueDaySet.has(format(cur, "yyyy-MM-dd"))) {
+        streak += 1;
+        cur.setDate(cur.getDate() - 1);
+      }
+      return streak;
+    };
 
-  // Chart data (based on all entries)
+    const streakToday = useMemo(() => computeStreak(new Date()), [uniqueDaySet]);
+    const streakYesterday = useMemo(() => computeStreak(subDays(new Date(), 1)), [uniqueDaySet]);
+
+    const streakIncludesToday = streakToday > 0;
+    const streak = Math.max(streakToday, streakYesterday); // shows 16 for Sep1–16 with no entry today
+
+    const weeklyProgress = useMemo(() => {
+      const start = startOfWeek(new Date());
+      const end = endOfWeek(new Date());
+      const daysWithEntry = new Set(
+        entries
+          .filter((e) => isWithinInterval(parseISO(e.date), { start, end }))
+          .map((e) => e.date)
+      );
+      const count = daysWithEntry.size;
+      const total = 7;
+      return { count, total, pct: Math.round((count / total) * 100) };
+    }, [entries]);
+
+    const badges = useMemo(() => {
+      const earned: string[] = [];
+      if (entries.length >= 1) earned.push("Mood Starter");
+      if (streak >= 7) earned.push("Consistency Builder (7-day streak)");
+      // 3 consecutive negative logs (by entry, not by day)
+      const negatives = new Set(
+        EMOTIONS.filter((e) => e.category === "negative").map((e) => e.id)
+      );
+      for (let i = 0; i <= entries.length - 3; i++) {
+        if (negatives.has(entries[i].emotion) &&
+            negatives.has(entries[i + 1].emotion) &&
+            negatives.has(entries[i + 2].emotion)) {
+          earned.push("Resilience");
+          break;
+        }
+      }
+      if (entries.length >= 10) earned.push("Mood Logs ×10");
+      return earned;
+    }, [entries, streak]);
+
+    useEffect(() => {
+      if (streak !== undefined) {
+        localStorage.setItem("mh:mood:streak", JSON.stringify(streak));
+      }
+      localStorage.setItem("mh:mood:badges", JSON.stringify(badges));
+    }, [streak, badges]);
+
+  /* ---------- Charts / Analytics computed strictly from entries ---------- */
   const chartData = useMemo(() => {
-    const grouped = entries.reduce((acc, entry) => {
-      const key =
+    // group by label depending on view
+    const grouped = entries.reduce((acc, e) => {
+      const label =
         viewMode === "daily"
-          ? `${entry.date} ${entry.time}`
+          ? `${e.date} ${e.time}`
           : viewMode === "weekly"
-          ? format(new Date(entry.date), "MMM dd")
-          : format(new Date(entry.date), "MMM yyyy");
-
-      if (!acc[key]) acc[key] = { date: key, total: 0, count: 0 };
-      const emotion = emotions.find(e => e.id === entry.emotion);
-      if (emotion) {
-        acc[key].total += emotion.intensity;
-        acc[key].count += 1;
+          ? format(new Date(e.date), "MMM dd")
+          : format(new Date(e.date), "MMM yyyy");
+      if (!acc[label]) acc[label] = { date: label, total: 0, count: 0 };
+      const meta = EMOTIONS.find(x => x.id === e.emotion);
+      if (meta) {
+        acc[label].total += meta.intensity;
+        acc[label].count += 1;
       }
       return acc;
     }, {} as Record<string, { date: string; total: number; count: number }>);
 
     return Object.values(grouped)
-      .map(g => ({
-        date: g.date,
-        average: Math.round((g.total / g.count) * 10) / 10,
-      }))
-      .slice(0, 14)
+      .map(g => ({ date: g.date, average: Math.round((g.total / g.count) * 10) / 10 }))
+      .slice(0, 24)
       .reverse();
   }, [entries, viewMode]);
 
-  // Updated emotion distribution for past 7 days
-  const emotionDistribution = useMemo(() => {
-    const sevenDaysAgo = format(subDays(new Date(), 7), "yyyy-MM-dd");
-    const recentEntries = entries.filter(entry => entry.date >= sevenDaysAgo);
-    
-    const counts = recentEntries.reduce((acc, entry) => {
-      acc[entry.emotion] = (acc[entry.emotion] || 0) + 1;
+  const past7Dist = useMemo(() => {
+    const sevenAgo = format(subDays(new Date(), 7), "yyyy-MM-dd");
+    const recent = entries.filter(e => e.date >= sevenAgo);
+    const counts = recent.reduce((acc, e) => {
+      acc[e.emotion] = (acc[e.emotion] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    
-    return emotions
-      .map(e => ({ name: e.name, value: counts[e.id] || 0, color: e.color, emoji: e.emoji }))
+    return EMOTIONS
+      .map(m => ({ id: m.id, name: m.name, emoji: m.emoji, value: counts[m.id] || 0 }))
       .filter(x => x.value > 0)
       .sort((a, b) => b.value - a.value);
   }, [entries]);
 
-  // Get dominant emotion for chart description
-  const getDominantEmotionText = useMemo(() => {
-    if (emotionDistribution.length === 0) return "tracking your emotions";
-    
-    const topEmotion = emotionDistribution[0];
-    if (topEmotion.value === 1) {
-      return `feeling ${topEmotion.name.toLowerCase()} occasionally`;
-    }
-    return `feeling mostly ${topEmotion.name.toLowerCase()} this week`;
-  }, [emotionDistribution]);
+  const dominant7 = past7Dist[0]?.name;
 
+  /* ---------- Entries filter (Browse) ---------- */
+  const filteredEntries = useMemo(() => {
+    if (entriesFilterType === "all") return entries;
+    if (entriesFilterType === "day" && entriesFilterDay) return entries.filter(e => e.date === entriesFilterDay);
+    if (entriesFilterType === "month" && entriesFilterMonth) return entries.filter(e => e.date.startsWith(entriesFilterMonth));
+    return entries;
+  }, [entries, entriesFilterType, entriesFilterDay, entriesFilterMonth]);
+
+  /* ---------- Logging ---------- */
   const logMood = () => {
     if (!selectedEmotion) return;
     const now = new Date();
     const newEntry: MoodEntry = {
-      id: `${Date.now()}`,
+      id: `m-${Date.now()}`,
       emotion: selectedEmotion,
       date: format(now, "yyyy-MM-dd"),
       time: format(now, "HH:mm"),
@@ -322,42 +441,33 @@ const MoodTrackingPage: React.FC = () => {
     setLogNotes("");
   };
 
-  // Heuristic suggestion (existing behavior)
-  const completeAssessment = () => {
-    const suggested: EmotionType[] = [];
-    assessmentAnswers.forEach((ansIdx, qIdx) => {
-      const opt = assessmentQuestions[qIdx].options[ansIdx];
-      if (opt) suggested.push(...(opt.emotions as EmotionType[]));
-    });
-    const score = suggested.reduce((acc, id) => {
-      acc[id] = (acc[id] || 0) + 1;
-      return acc;
-    }, {} as Record<EmotionType, number>);
-    const top = Object.entries(score).sort(([, a], [, b]) => b - a)[0]?.[0] as EmotionType;
-    setSelectedEmotion(top);
-    setShowAssessment(false);
-    setAssessmentAnswers([]);
-  };
-
-  // AI suggestion (Sea-Lion)
-  const aiSuggestMoodFromAssessment = async () => {
+  /* ---------- AI Summary (from entries) ---------- */
+  const generateAISummary = async () => {
+    setIsGeneratingAI(true);
     try {
-      const answers = assessmentAnswers
-        .map((idx, i) => {
-          const q = assessmentQuestions[i];
-          const a = typeof idx === "number" ? q.options[idx]?.text : "";
-          return `Q${i + 1}: ${q.question}\nA: ${a}`;
-        })
-        .join("\n\n");
+      const recent = entries.slice(0, 40);
+      const pos = recent.filter(e => {
+        const cat = EMOTIONS.find(x => x.id === e.emotion)?.category;
+        return cat === "positive";
+      }).length;
+
+      // Create a compact, privacy-light prompt (no raw notes)
+      const histogram = EMOTIONS.reduce((acc, m) => {
+        acc[m.id] = recent.filter(e => e.emotion === m.id).length;
+        return acc;
+      }, {} as Record<string, number>);
 
       const system = {
         role: "system",
         content:
-          "You classify mood into one of: ecstatic, joyful, content, peaceful, optimistic, grateful, neutral, bored, tired, stressed, anxious, worried, frustrated, angry, sad, lonely, overwhelmed, hopeless. Return only the single label (lowercase), no extra text.",
+          "You are a supportive mental health assistant. Analyze trends from provided mood counts. Offer 3-4 short, kind suggestions. Keep it plain text only.",
       };
       const user = {
         role: "user",
-        content: `Based on this short mood self-assessment, suggest the closest single mood label:\n\n${answers}`,
+        content:
+          `Recent mood counts (last ${recent.length} logs):\n` +
+          Object.entries(histogram).map(([k, v]) => `${k}: ${v}`).join(", ") +
+          `\nPositive ratio: ${Math.round((pos / Math.max(1, recent.length)) * 100)}%.\nReturn a short, encouraging analysis in 4-6 lines.`,
       };
 
       const res = await fetch(AI_ENDPOINT, {
@@ -369,273 +479,235 @@ const MoodTrackingPage: React.FC = () => {
         },
         body: JSON.stringify({
           model: AI_MODEL,
-          temperature: 0.2,
-          max_completion_tokens: 10,
+          temperature: 0.3,
+          max_completion_tokens: 180,
           messages: [system, user],
         }),
       });
 
-      if (!res.ok) throw new Error(`AI error ${res.status}`);
-      const data = await res.json();
-      const raw = data?.choices?.[0]?.message?.content?.trim()?.toLowerCase() || "";
-      const found = emotions.find(e => e.id === raw)?.id as EmotionType | undefined;
-      if (found) {
-        setSelectedEmotion(found);
-      } else {
-        completeAssessment(); // fallback to heuristic
-      }
-      setShowAssessment(false);
-      setAssessmentAnswers([]);
+      const ok = res.ok ? await res.json() : null;
+      const text =
+        ok?.choices?.[0]?.message?.content?.trim() ||
+        // Fallback local summary:
+        [
+          `Mood Analysis Summary`,
+          ``,
+          `Recent logs: ${recent.length}`,
+          `Top emotion: ${dominant7 || "Neutral"}`,
+          `Positive ratio: ${Math.round((pos / Math.max(1, recent.length)) * 100)}%`,
+          `Trend: ${pos > recent.length / 2 ? "Generally positive" : "Mixed—prioritize gentleness and rest"}`,
+          ``,
+          `Suggestions:`,
+          `1) Keep daily logs to strengthen insight`,
+          `2) Note triggers when emotions feel strong`,
+          `3) Pair with journaling for context`,
+          `4) Use short breaths or grounding on tough days`,
+        ].join("\n");
+
+      setAiSummary(text);
     } catch {
-      completeAssessment();
+      // Silent fallback (local summary above already covers)
+      setAiSummary("We couldn’t reach AI right now. Try again later. Meanwhile, keep logging and caring for yourself.");
+    } finally {
+      setIsGeneratingAI(false);
     }
   };
 
-  const generateAISummary = async () => {
-    setIsGeneratingAI(true);
-    // demo: local summary (plain text — no markdown)
-    setTimeout(() => {
-      const recent = entries.slice(0, 20);
-      const positive = recent.filter(e => emotions.find(x => x.id === e.emotion)?.category === "positive").length;
-      const txt =
-        `Mood Analysis Summary
+  /* ===========================
+     UI
+  =========================== */
+    return (
+      <div className="min-h-screen bg-[#FFF5EC]">
+        {/* HERO */}
+        <section className="relative pt-2 pb-10">
+          <div className="max-w-7xl mx-auto px-4">
+            <div className="flex flex-col lg:flex-row items-center gap-12">
+              <div className="flex-1">
+                <h1 className="text-5xl md:text-7xl font-extrabold leading-tight text-black mb-4">
+                  Mood
+                  <span className="block bg-gradient-to-r from-primary via-wellness to-secondary bg-clip-text text-transparent">
+                    Tracking
+                  </span>
+                </h1>
+                <p className="text-xl md:text-2xl text-gray-700 leading-relaxed max-w-2xl">
+                  Track emotions, spot patterns, and celebrate progress—gently and clearly.
+                </p>
 
-Recent logs: ${recent.length}
-Positive ratio: ${Math.round((positive / Math.max(1, recent.length)) * 100)}%
-Top emotion: ${emotionDistribution[0]?.name || "Neutral"}
-Trend: ${positive > recent.length / 2 ? "Generally positive outlook" : "Mixed / focus on self-care"}
+                <div className="mt-6 flex flex-col sm:flex-row gap-4">
+                  {/* Log Mood */}
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button
+                        size="lg"
+                        className="text-lg px-8 py-4 shadow transition"
+                        style={{ backgroundColor: PURPLE, color: "#fff" }}
+                      >
+                        <Plus className="w-5 h-5 mr-2" />
+                        Log Mood Now
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                      <DialogHeader>
+                        <DialogTitle>How are you feeling right now?</DialogTitle>
+                        <DialogDescription>Select the closest match</DialogDescription>
+                      </DialogHeader>
 
-Suggestions:
-1) Keep logging daily for clearer trends
-2) Note triggers when emotions feel strong
-3) Pair with journaling for deeper insight
-4) Use breathing or grounding when stressed`;
-      setAiSummary(txt);
-      setIsGeneratingAI(false);
-    }, 900);
-  };
-
-  return (
-    <div className="min-h-screen bg-[#FFF5EC]">
-      {/* Hero Section */}
-      <section className="relative pt-2 pb-12">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex flex-col lg:flex-row items-center gap-12">
-            <div className="flex-1">
-              <h1 className="text-5xl md:text-7xl font-extrabold leading-tight text-black mb-4">
-                Mood
-                <span className="block bg-gradient-to-r from-primary via-wellness to-secondary bg-clip-text text-transparent pb-1">
-                  Tracking
-                </span>
-              </h1>
-              <p className="text-xl md:text-2xl text-gray-700 leading-relaxed max-w-2xl mb-8">
-                Track 18 emotions with precision. Understand patterns, celebrate progress, and nurture your emotional wellbeing.
-              </p>
-
-              <div className="flex flex-col sm:flex-row gap-4">
-                {/* Log Mood */}
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button
-                      size="lg"
-                      className="text-lg px-8 py-4 shadow transition"
-                      style={{ backgroundColor: PURPLE, color: "#fff" }}
-                    >
-                      <Plus className="w-5 h-5 mr-2" />
-                      Log Mood Now
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                    <DialogHeader>
-                      <DialogTitle>How are you feeling right now?</DialogTitle>
-                      <DialogDescription>Select the emotion that best describes your current state</DialogDescription>
-                    </DialogHeader>
-
-                    <div className="space-y-6">
-                      {(["positive", "neutral", "negative"] as const).map(cat => (
-                        <div key={cat}>
-                          <h3 className="text-lg font-semibold mb-3 capitalize" style={{ color: PURPLE }}>
-                            {cat === "positive" ? "Uplifting" : cat === "neutral" ? "Steady" : "Challenging"} Emotions
-                          </h3>
-                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                            {emotions.filter(e => e.category === cat).map(emotion => (
-                              <Button
-                                key={emotion.id}
-                                variant={selectedEmotion === emotion.id ? "default" : "outline"}
-                                className="p-4 h-auto flex flex-col gap-2 transition-all"
-                                style={{
-                                  backgroundColor: selectedEmotion === emotion.id ? emotion.color : "white",
-                                  borderColor: emotion.color,
-                                  color: selectedEmotion === emotion.id ? "white" : emotion.color,
-                                }}
-                                onClick={() => setSelectedEmotion(emotion.id)}
-                              >
-                                <span className="text-2xl">{emotion.emoji}</span>
-                                <span className="text-sm font-medium">{emotion.name}</span>
-                              </Button>
-                            ))}
+                      <div className="space-y-6">
+                        {(["positive", "neutral", "negative"] as const).map(cat => (
+                          <div key={cat}>
+                            <h3 className="text-lg font-semibold mb-3 capitalize" style={{ color: PURPLE }}>
+                              {cat === "positive" ? "Uplifting" : cat === "neutral" ? "Steady" : "Challenging"} Emotions
+                            </h3>
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                              {EMOTIONS.filter(e => e.category === cat).map(e => (
+                                <Button
+                                  key={e.id}
+                                  variant={selectedEmotion === e.id ? "default" : "outline"}
+                                  className="p-4 h-auto flex flex-col gap-2 transition-all"
+                                  style={{
+                                    backgroundColor: selectedEmotion === e.id ? PURPLE : "white",
+                                    borderColor: PURPLE,
+                                    color: selectedEmotion === e.id ? "white" : "#111827",
+                                  }}
+                                  onClick={() => setSelectedEmotion(e.id)}
+                                >
+                                  <span className="text-2xl">{e.emoji}</span>
+                                  <span className="text-sm font-medium">{e.name}</span>
+                                </Button>
+                              ))}
+                            </div>
                           </div>
+                        ))}
+
+                        <div>
+                          <Label htmlFor="notes" className="text-sm font-medium">Notes (optional)</Label>
+                          <Textarea
+                            id="notes"
+                            placeholder="What happened? Any context…"
+                            value={logNotes}
+                            onChange={(e) => setLogNotes(e.target.value)}
+                            rows={3}
+                            className="mt-2"
+                          />
                         </div>
-                      ))}
 
-                      <div>
-                        <Label htmlFor="notes" className="text-sm font-medium">Notes (optional)</Label>
-                        <Textarea
-                          id="notes"
-                          placeholder="What triggered this emotion? Any additional context..."
-                          value={logNotes}
-                          onChange={(e) => setLogNotes(e.target.value)}
-                          rows={3}
-                          className="mt-2"
-                        />
+                        <div className="flex gap-3">
+                          <Button
+                            onClick={logMood}
+                            disabled={!selectedEmotion}
+                            className="flex-1"
+                            style={{ backgroundColor: PURPLE, color: "#fff" }}
+                          >
+                            Log Mood
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => setShowAssessment(true)}
+                            style={{ borderColor: PURPLE, color: PURPLE }}
+                          >
+                            <HelpCircle className="w-4 h-4 mr-2" />
+                            Need Help?
+                          </Button>
+                        </div>
                       </div>
+                    </DialogContent>
+                  </Dialog>
 
-                      <div className="flex gap-3">
-                        <Button
-                          onClick={logMood}
-                          disabled={!selectedEmotion}
-                          className="flex-1"
-                          style={{ backgroundColor: PURPLE, color: "#fff" }}
-                        >
-                          Log Mood
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => setShowAssessment(true)}
-                          style={{ borderColor: PURPLE, color: PURPLE }}
-                        >
-                          <HelpCircle className="w-4 h-4 mr-2" />
-                          Need Help?
-                        </Button>
-                      </div>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-
-                <Button
-                  size="lg"
-                  variant="outline"
-                  className="text-lg px-8 py-4 bg-white"
-                  style={{ borderColor: PURPLE, color: PURPLE, borderWidth: 2 }}
-                  onClick={() => document.getElementById("analytics")?.scrollIntoView({ behavior: "smooth" })}
-                >
-                  <BarChart3 className="w-5 h-5 mr-2" />
-                  View Analytics
-                </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="text-lg px-8 py-4 bg-white"
+                    style={{ borderColor: PURPLE, color: PURPLE, borderWidth: 2 }}
+                    onClick={() => document.getElementById("analytics")?.scrollIntoView({ behavior: "smooth" })}
+                  >
+                    <BarChart3 className="w-5 h-5 mr-2" />
+                    View Analytics
+                  </Button>
+                </div>
               </div>
-            </div>
 
-            {/* Right image — no container styling */}
-            <div className="flex-1">
-              <img
-                src={moodHeroImage}
-                alt="Mood tracking illustration"
-                className="w-full h-auto object-cover"
-              />
+              <div className="flex-1">
+                <img src={moodHeroImage} alt="Mood tracking illustration" className="w-full h-auto object-cover" />
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Recent Moods (with Day/Month/All filter) */}
-      <section className="py-8">
-        <div className="max-w-7xl mx-auto px-4">
-          <Card
-            className="bg-white border-2 transition hover:border-[#717EF3]"
-            style={{ borderColor: `${PURPLE}33` }}
-          >
-            <CardHeader>
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <Clock className="w-5 h-5" style={{ color: PURPLE }} />
-                    Recent Mood Logs
-                  </CardTitle>
-                  <CardDescription>Your latest emotional check-ins</CardDescription>
+        {/* ======= STATS ROW: Streak / This Week / Badges ======= */}
+        <section className="pb-1 -mt-2" id="analytics">
+          <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Streak */}
+            <Card className="bg-white" style={{ backgroundColor: "#E8EAFF", borderColor: `${PURPLE}33`, borderWidth: 2 }}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5" style={{ color: PURPLE }} />
+                  <CardTitle className="text-lg">Your Streak</CardTitle>
                 </div>
-
-                <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-                  <Select value={entriesFilterType} onValueChange={(v: any) => setEntriesFilterType(v)}>
-                    <SelectTrigger className="w-40">
-                      <SelectValue placeholder="Filter by" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="day">Day</SelectItem>
-                      <SelectItem value="month">Month</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  {entriesFilterType === "day" && (
-                    <input
-                      type="date"
-                      value={entriesFilterDay}
-                      onChange={(e) => setEntriesFilterDay(e.target.value)}
-                      className="h-10 px-3 rounded-md border"
-                      style={{ borderColor: `${PURPLE}33` }}
-                    />
-                  )}
-
-                  {entriesFilterType === "month" && (
-                    <input
-                      type="month"
-                      value={entriesFilterMonth}
-                      onChange={(e) => setEntriesFilterMonth(e.target.value)}
-                      className="h-10 px-3 rounded-md border"
-                      style={{ borderColor: `${PURPLE}33` }}
-                    />
-                  )}
-
-                  <Badge variant="outline" style={{ borderColor: PURPLE, color: PURPLE }}>
-                    {filteredEntries.length} entries
-                  </Badge>
+                <CardDescription className="font-bold">Consecutive days you’ve logged</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold" style={{ color: PURPLE }}>
+                  {streak} day{streak === 1 ? "" : "s"}
                 </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3 max-h-60 overflow-y-auto">
-                {filteredEntries.slice(0, 12).map((entry) => {
-                  const emotion = emotions.find((e) => e.id === entry.emotion);
-                  return (
-                    <div
-                      key={entry.id}
-                      className="flex items-center justify-between p-3 rounded-lg border transition hover:border-[#717EF3]"
-                      style={{
-                        borderColor: `${emotion?.color || "#ddd"}33`,
-                        backgroundColor: `${emotion?.color || "#ddd"}08`,
-                      }}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-2xl">{emotion?.emoji}</span>
-                        <div>
-                          <p className="font-medium" style={{ color: emotion?.color }}>
-                            {emotion?.name}
-                          </p>
-                          <p className="text-sm text-gray-600">
-                            {entry.date} at {entry.time}
-                          </p>
-                        </div>
-                      </div>
-                      {entry.notes && (
-                        <p className="text-sm text-gray-600 max-w-xs truncate">{entry.notes}</p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </section>
+                <p className="text-sm font-bold text-gray-600 mt-1">
+                  Keep going—tiny steps add up 🌱
+                </p>
+              </CardContent>
+            </Card>
 
-      {/* Analytics */}
-      <section id="analytics" className="py-8">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <Card
-              className="lg:col-span-2 bg-white border-2 transition hover:border-[#717EF3]"
-              style={{ borderColor: `${PURPLE}33` }}
-            >
+            {/* This Week */}
+            <Card className="bg-white" style={{ backgroundColor: "#FCD4D2", borderColor: `${PURPLE}33`, borderWidth: 2 }}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Trophy className="w-5 h-5" style={{ color: PURPLE }} />
+                  <CardTitle className="text-lg">This Week</CardTitle>
+                </div>
+                <CardDescription className="font-bold">{weeklyProgress.count} / {weeklyProgress.total} days</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full"
+                    style={{
+                      width: `${weeklyProgress.pct}%`,
+                      backgroundColor: PURPLE,
+                      transition: "width 300ms ease",
+                    }}
+                  />
+                </div>
+                <p className="text-sm font-bold text-gray-600 mt-2">Aim for 4–5 days as a solid baseline.</p>
+              </CardContent>
+            </Card>
+
+            {/* Badges */}
+            <Card className="bg-white" style={{ backgroundColor: "#F4E7E1", borderColor: `${PURPLE}33`, borderWidth: 2 }}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Trophy className="w-5 h-5" style={{ color: PURPLE }} />
+                  <CardTitle className="text-lg">Badges</CardTitle>
+                </div>
+                <CardDescription className="font-bold">Earn badges as you log your mood - small rewards for showing up.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                {badges.length === 0 ? (
+                  <span className="text-sm text-gray-600">Log your mood to earn “First Check-in”.</span>
+                ) : (
+                  badges.map((b, i) => (
+                    <Badge key={i} className="text-xs bg-white" variant="outline" style={{ borderColor: `${PURPLE}66`, color: PURPLE }}>
+                      {b}
+                    </Badge>
+                  ))
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </section>
+
+        {/* ======= ANALYTICS: Trend + Past 7 breakdown ======= */}
+        <section className="py-6">
+          <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Trend */}
+            <Card className="lg:col-span-2 bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle className="flex items-center gap-2">
@@ -655,104 +727,56 @@ Suggestions:
                 </div>
                 <CardDescription>Average mood intensity over time (1–10)</CardDescription>
               </CardHeader>
-
-              {/* Enhanced chart with better visuals */}
               <CardContent>
-                <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-purple-50 to-blue-50 border">
-                  <div className="flex flex-wrap items-center gap-3 text-sm">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-gradient-to-r from-purple-500 to-blue-500"></div>
-                      <span className="font-medium">You have been {getDominantEmotionText}</span>
-                    </div>
-                  </div>
+                <div className="mb-4 p-3 rounded-xl bg-purple-50 border">
+                  <span className="text-sm text-purple-700">
+                    {past7Dist.length ? `This week you felt mostly ${dominant7?.toLowerCase()}.` : `Start logging to see your patterns.`}
+                  </span>
                 </div>
 
-                <div className="relative">
-                  <ResponsiveContainer width="100%" height={320}>
-                    <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                      <defs>
-                        <linearGradient id="moodGradient" x1="0" y1="0" x2="1" y2="0">
-                          <stop offset="0%" stopColor="#8B5CF6" />
-                          <stop offset="100%" stopColor="#3B82F6" />
-                        </linearGradient>
-                        <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor={PURPLE} stopOpacity={0.3} />
-                          <stop offset="100%" stopColor={PURPLE} stopOpacity={0.05} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" opacity={0.6} />
-                      <XAxis 
-                        dataKey="date" 
-                        fontSize={11} 
-                        tick={{ fill: "#6b7280" }}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      <YAxis 
-                        domain={[1, 10]} 
-                        fontSize={11} 
-                        tick={{ fill: "#6b7280" }}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      {/* Enhanced tooltip */}
-                      {/* @ts-ignore */}
-                      <Tooltip
-                        content={({ active, payload, label }) => {
-                          if (!active || !payload?.length) return null;
-                          const v = payload[0].value as number;
-                          const emoji = v >= 8 ? "😊" : v >= 6 ? "🙂" : v >= 4 ? "😐" : "😔";
-                          return (
-                            <div className="rounded-xl bg-white p-4 shadow-lg border border-purple-100 animate-scale-in">
-                              <div className="text-sm font-semibold text-purple-700 mb-1">
-                                {label}
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-lg">{emoji}</span>
-                                <div>
-                                  <div className="text-sm font-medium text-gray-700">
-                                    Mood Score: <span className="text-purple-600 font-bold">{v}/10</span>
-                                  </div>
-                                  <div className="text-xs text-gray-500">
-                                    {v >= 8 ? "Feeling great!" : v >= 6 ? "Pretty good" : v >= 4 ? "Neutral mood" : "Needs attention"}
-                                  </div>
-                                </div>
-                              </div>
+                <ResponsiveContainer width="100%" height={320}>
+                  <LineChart data={chartData} margin={{ top: 20, right: 30, left: 10, bottom: 10 }}>
+                    <defs>
+                      <linearGradient id="moodGradient" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stopColor="#8B5CF6" />
+                        <stop offset="100%" stopColor="#3B82F6" />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" opacity={0.6} />
+                    <XAxis dataKey="date" fontSize={11} tick={{ fill: "#6b7280" }} axisLine={false} tickLine={false} />
+                    <YAxis domain={[1, 10]} fontSize={11} tick={{ fill: "#6b7280" }} axisLine={false} tickLine={false} />
+                    {/* @ts-ignore */}
+                    <Tooltip
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        const v = payload[0].value as number;
+                        const emoji = v >= 8 ? "😊" : v >= 6 ? "🙂" : v >= 4 ? "😐" : "😔";
+                        return (
+                          <div className="rounded-xl bg-white p-3 shadow-lg border">
+                            <div className="text-sm font-semibold text-purple-700 mb-1">{label}</div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg">{emoji}</span>
+                              <div className="text-sm text-gray-700">Mood Score: <b>{v}/10</b></div>
                             </div>
-                          );
-                        }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="average"
-                        stroke="url(#moodGradient)"
-                        strokeWidth={4}
-                        dot={{ 
-                          fill: "white", 
-                          stroke: PURPLE, 
-                          strokeWidth: 3, 
-                          r: 5,
-                          filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.1))"
-                        }}
-                        activeDot={{
-                          r: 7,
-                          fill: PURPLE,
-                          stroke: "white",
-                          strokeWidth: 3,
-                          filter: "drop-shadow(0 4px 8px rgba(0,0,0,0.2))"
-                        }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="average"
+                      stroke="url(#moodGradient)"
+                      strokeWidth={4}
+                      dot={{ fill: "white", stroke: PURPLE, strokeWidth: 3, r: 5 }}
+                      activeDot={{ r: 7, fill: PURPLE, stroke: "white", strokeWidth: 3 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
               </CardContent>
             </Card>
 
-            {/* Emotion Breakdown – Updated for past 7 days with clearer messaging */}
-            <Card
-              className="bg-white border-2 transition hover:border-[#717EF3]"
-              style={{ borderColor: `${PURPLE}33` }}
-            >
+            {/* Past 7 days */}
+            <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Heart className="w-5 h-5" style={{ color: PURPLE }} />
@@ -761,127 +785,67 @@ Suggestions:
                 <CardDescription>How often you felt each emotion</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {emotionDistribution.slice(0, 6).map((item, index) => {
-                    const total = emotionDistribution.reduce((sum, emotion) => sum + emotion.value, 0) || 1;
-                    const pct = Math.round((item.value / total) * 100);
-                    return (
-                      <div 
-                        key={item.name} 
-                        className="group hover:bg-gray-50 hover:shadow-md hover:border hover:border-gray-200 p-3 rounded-lg transition-all duration-200 hover:scale-[1.02] cursor-pointer"
-                        style={{ animationDelay: `${index * 100}ms` }}
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-3">
-                            <div 
-                              className="w-4 h-4 rounded-full shadow-sm transition-transform group-hover:scale-110" 
-                              style={{ backgroundColor: item.color }} 
-                            />
-                            <div className="flex items-center gap-2">
-                              <span className="text-lg">{item.emoji}</span>
-                              <span className="text-sm font-semibold text-gray-700">{item.name}</span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-500">{item.value} {item.value === 1 ? 'time' : 'times'}</span>
-                            <Badge 
-                              variant="outline" 
-                              className="font-bold"
-                              style={{ borderColor: item.color, color: item.color, backgroundColor: `${item.color}15` }}
-                            >
-                              {pct}%
-                            </Badge>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {emotionDistribution.length === 0 && (
-                    <div className="text-center py-8">
-                      <div className="text-4xl mb-2">📊</div>
-                      <p className="text-sm text-gray-500">No emotions logged in the past 7 days. Start tracking to see your patterns!</p>
+                <div className="space-y-3">
+                  {past7Dist.length === 0 && (
+                    <div className="text-center py-8 text-sm text-gray-500">
+                      No emotions logged in the past 7 days.
                     </div>
                   )}
+
+                  {past7Dist.slice(0, 12).map((item) => (
+                    <div key={item.id} className="p-3 rounded-lg border flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl">{item.emoji}</span>
+                        <span className="text-sm font-semibold text-gray-700">{item.name}</span>
+                      </div>
+                      <Badge variant="outline" style={{ borderColor: PURPLE, color: PURPLE, background: "#fff" }}>
+                        {item.value}
+                      </Badge>
+                    </div>
+                  ))}
                 </div>
               </CardContent>
             </Card>
+
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* AI Summary */}
-      <section className="py-8">
-        <div className="max-w-7xl mx-auto px-4">
-          <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5" style={{ color: PURPLE }} />
-                AI Mood Insights
-              </CardTitle>
-              <CardDescription>
-                Personalized analysis of your emotional patterns and recommendations
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="space-y-4">
-              <Button
-                onClick={generateAISummary}
-                disabled={isGeneratingAI}
-                style={{ backgroundColor: PURPLE, color: "#fff" }}
-              >
-                {isGeneratingAI ? "Analyzing..." : "Generate AI Summary"}
-              </Button>
-
-              {aiSummary && (
-                <div
-                  className="p-6 rounded-xl shadow-md border-2 space-y-4 bg-white"
-                  style={{ borderColor: PURPLE }}
+        {/* ======= AI INSIGHTS ======= */}
+        <section className="py-6">
+          <div className="max-w-7xl mx-auto px-4">
+            <Card className="bg-white border-2" style={{ backgroundColor: "#CEE2E0", borderColor: `${PURPLE}33` }}>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5" style={{ color: PURPLE }} />
+                  AI Mood Insights
+                </CardTitle>
+                <CardDescription>Personalized analysis based on your entries</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Button
+                  onClick={generateAISummary}
+                  disabled={isGeneratingAI}
+                  style={{ backgroundColor: PURPLE, color: "#fff" }}
                 >
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-5 h-5" style={{ color: PURPLE }} />
-                    <h3 className="text-lg font-bold" style={{ color: PURPLE }}>
-                      Your Personalized Mood Insights
-                    </h3>
+                  {isGeneratingAI ? "Analyzing..." : "Generate AI Summary"}
+                </Button>
+
+                {aiSummary && (
+                  <div className="p-6 rounded-xl shadow-md border-2 bg-white" style={{ borderColor: PURPLE }}>
+                    <pre className="whitespace-pre-wrap text-gray-700 leading-7">{aiSummary}</pre>
                   </div>
-                  {/* Plain text, no markdown — no asterisks */}
-                  <pre className="whitespace-pre-wrap text-gray-700 leading-7">{aiSummary}</pre>
-                  <p className="text-sm text-gray-500">
-                    Quick takeaways above are based on your latest logs.
-                  </p>
-                </div>
-              )}
-            </CardContent>
+                )}
+              </CardContent>
+            </Card>
 
-            {aiSummary && (
-              <div className="px-6 pb-6">
-                <div className="flex justify-end">
-                  <Button
-                    variant="outline"
-                    style={{ borderColor: PURPLE, color: PURPLE }}
-                    onClick={() => { /* TODO: persist summary */ }}
-                  >
-                    Save Summary
-                  </Button>
-                </div>
-              </div>
-            )}
-          </Card>
-        </div>
-      </section>
+          </div>
+        </section>
 
-      {/* Enhanced Program Cards - Updated mental health overview to purple theme */}
-      <section className="py-8">
-        <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Mental Health Overview - Now purple themed */}
-          <div className="group relative overflow-hidden rounded-3xl bg-gradient-to-br from-purple-400 via-violet-500 to-indigo-600 p-1 transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl">
-            <div className="absolute inset-0 bg-gradient-to-br from-purple-400/20 via-violet-500/20 to-indigo-600/20 animate-pulse"></div>
-            
-            <div className="relative h-full rounded-3xl bg-white/95 backdrop-blur-sm p-8">
-              <div className="absolute top-4 right-4 w-12 h-12 rounded-full bg-gradient-to-r from-purple-400 to-violet-500 flex items-center justify-center transform group-hover:scale-110 transition-transform">
-                <Target className="w-6 h-6 text-white" />
-              </div>
-              
-              <div className="space-y-4">
+        {/* ======= PROGRAM CARDS ======= */}
+        <section className="py-6">
+          <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="group relative overflow-hidden rounded-3xl bg-gradient-to-br from-purple-400 via-violet-500 to-indigo-600 p-1">
+              <div className="relative h-full rounded-3xl bg-white/95 p-8">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-lg bg-gradient-to-r from-purple-400 to-violet-500 flex items-center justify-center">
                     <Brain className="w-4 h-4 text-white" />
@@ -890,19 +854,11 @@ Suggestions:
                     Mental Health Overview
                   </h3>
                 </div>
-                
-                <p className="text-gray-600 leading-relaxed">
-                  Comprehensive wellness dashboard with exercises, resources, and personalized insights to support your mental health journey.
+                <p className="text-gray-600 mt-3">
+                  Exercises, resources, and insights to support your well-being.
                 </p>
-                
-                <div className="flex flex-wrap gap-2 mt-4">
-                  <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">Exercises</span>
-                  <span className="px-3 py-1 bg-violet-100 text-violet-700 rounded-full text-xs font-medium">Resources</span>
-                  <span className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">Insights</span>
-                </div>
-                
                 <Button
-                  className="w-full mt-6 bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white border-0 shadow-lg transform transition-all duration-200 hover:scale-[1.02]"
+                  className="w-full mt-6 bg-gradient-to-r from-purple-500 to-violet-600 text-white"
                   onClick={() => (window.location.href = "/MentalHealthOverview")}
                 >
                   <ExternalLink className="w-4 h-4 mr-2" />
@@ -910,18 +866,9 @@ Suggestions:
                 </Button>
               </div>
             </div>
-          </div>
 
-          {/* Mood Assessment Tool */}
-          <div className="group relative overflow-hidden rounded-3xl bg-gradient-to-br from-purple-400 via-violet-500 to-indigo-600 p-1 transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl">
-            <div className="absolute inset-0 bg-gradient-to-br from-purple-400/20 via-violet-500/20 to-indigo-600/20 animate-pulse"></div>
-            
-            <div className="relative h-full rounded-3xl bg-white/95 backdrop-blur-sm p-8">
-              <div className="absolute top-4 right-4 w-12 h-12 rounded-full bg-gradient-to-r from-purple-400 to-violet-500 flex items-center justify-center transform group-hover:scale-110 transition-transform">
-                <Sparkles className="w-6 h-6 text-white" />
-              </div>
-              
-              <div className="space-y-4">
+            <div className="group relative overflow-hidden rounded-3xl bg-gradient-to-br from-purple-400 via-violet-500 to-indigo-600 p-1">
+              <div className="relative h-full rounded-3xl bg-white/95 p-8">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-lg bg-gradient-to-r from-purple-400 to-violet-500 flex items-center justify-center">
                     <HelpCircle className="w-4 h-4 text-white" />
@@ -930,141 +877,178 @@ Suggestions:
                     Mood Assessment
                   </h3>
                 </div>
-                
-                <p className="text-gray-600 leading-relaxed">
-                  AI-powered mood analysis and personalized emotional support. Get guidance when you need it most.
+                <p className="text-gray-600 mt-3">
+                  Quick AI-assisted check-in when you need a nudge.
                 </p>
-                
-                <div className="flex flex-wrap gap-2 mt-4">
-                  <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">AI Analysis</span>
-                  <span className="px-3 py-1 bg-violet-100 text-violet-700 rounded-full text-xs font-medium">Support</span>
-                  <span className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">Guidance</span>
-                </div>
-                
-                <div className="flex gap-3 mt-6">
-                  <Button
-                    variant="outline"
-                    className="flex-1 border-2 border-purple-200 text-purple-600 hover:bg-purple-50 transition-all duration-200"
-                    onClick={() => setShowAssessment(true)}
-                  >
-                    <Brain className="w-4 h-4 mr-2" />
-                    Quick Assessment
-                  </Button>
-                </div>
+                <Button
+                  variant="outline"
+                  className="w-full mt-6 border-2 border-purple-200 text-purple-600 hover:bg-purple-50"
+                  onClick={() => setShowAssessment(true)}
+                >
+                  <Target className="w-4 h-4 mr-2" />
+                  Start a Quick Assessment
+                </Button>
               </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Mood Assessment Dialog */}
-      <Dialog open={showAssessment} onOpenChange={setShowAssessment}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Mood Assessment</DialogTitle>
-            <DialogDescription>Answer these quick questions and let AI estimate your current mood.</DialogDescription>
-          </DialogHeader>
+        {/* ======= BROWSE & LOGS ======= */}
+        <section className="py-6">
+          <div className="max-w-7xl mx-auto px-4">
+            <Card className="bg-white border-2" style={{ borderColor: `${PURPLE}33` }}>
+              <CardHeader>
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Clock className="w-5 h-5" style={{ color: PURPLE }} />
+                      Browse Mood Logs
+                    </CardTitle>
+                    <CardDescription>Filter by day or month.</CardDescription>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                    <Select value={entriesFilterType} onValueChange={(v: any) => setEntriesFilterType(v)}>
+                      <SelectTrigger className="w-40">
+                        <SelectValue placeholder="Filter by" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="day">Day</SelectItem>
+                        <SelectItem value="month">Month</SelectItem>
+                      </SelectContent>
+                    </Select>
 
-          <div className="space-y-6">
-            {assessmentQuestions.map((q, qIndex) => (
-              <div key={qIndex}>
-                <h3 className="font-medium mb-3">{q.question}</h3>
-                <RadioGroup
-                  value={assessmentAnswers[qIndex]?.toString()}
-                  onValueChange={(v) => {
-                    const next = [...assessmentAnswers];
-                    next[qIndex] = parseInt(v);
-                    setAssessmentAnswers(next);
+                    {entriesFilterType === "day" && (
+                      <input
+                        type="date"
+                        value={entriesFilterDay}
+                        onChange={(e) => setEntriesFilterDay(e.target.value)}
+                        className="h-10 px-3 rounded-md border"
+                        style={{ borderColor: `${PURPLE}33` }}
+                      />
+                    )}
+
+                    {entriesFilterType === "month" && (
+                      <input
+                        type="month"
+                        value={entriesFilterMonth}
+                        onChange={(e) => setEntriesFilterMonth(e.target.value)}
+                        className="h-10 px-3 rounded-md border"
+                        style={{ borderColor: `${PURPLE}33` }}
+                      />
+                    )}
+
+                    <Badge variant="outline" style={{ borderColor: PURPLE, color: PURPLE }}>
+                      {filteredEntries.length} entries
+                    </Badge>
+                  </div>
+                </div>
+              </CardHeader>
+
+              <CardContent>
+                <div className="space-y-3">
+                  {filteredEntries.map((entry) => {
+                    const meta = EMOTIONS.find((e) => e.id === entry.emotion);
+                    return (
+                      <div
+                        key={entry.id}
+                        className="flex items-center justify-between p-3 rounded-lg border transition"
+                        style={{ borderColor: `${PURPLE}33`, backgroundColor: "#fff" }}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-2xl">{meta?.emoji}</span>
+                          <div>
+                            <p className="font-medium text-gray-900">{meta?.name}</p>
+                            <p className="text-sm text-gray-600">
+                              {format(new Date(entry.date + "T00:00:00"), "EEEE, MMM d, yyyy")} · {entry.time}
+                            </p>
+                          </div>
+                        </div>
+                        {entry.notes && <p className="text-sm text-gray-600 max-w-[40ch] truncate">{entry.notes}</p>}
+                      </div>
+                    );
+                  })}
+                  {filteredEntries.length === 0 && (
+                    <div className="text-center py-10 text-gray-500">No logs found for this filter.</div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
+
+
+
+        {/* Assessment Dialog */}
+        <Dialog open={showAssessment} onOpenChange={setShowAssessment}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Mood Assessment</DialogTitle>
+              <DialogDescription>Answer a few questions—get an estimated mood</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-6">
+              {assessmentQuestions.map((q, qIndex) => (
+                <div key={qIndex}>
+                  <h3 className="font-medium mb-3">{q.question}</h3>
+                  <RadioGroup
+                    value={
+                      typeof assessmentAnswers[qIndex] === "number"
+                        ? String(assessmentAnswers[qIndex])
+                        : undefined
+                    }
+                    onValueChange={(v) => {
+                      const next = [...assessmentAnswers];
+                      next[qIndex] = parseInt(v);
+                      setAssessmentAnswers(next);
+                    }}
+                  >
+                    {q.options.map((opt, oIndex) => (
+                      <div key={oIndex} className="flex items-center space-x-2">
+                        <RadioGroupItem value={String(oIndex)} id={`q${qIndex}o${oIndex}`} />
+                        <Label htmlFor={`q${qIndex}o${oIndex}`} className="text-sm">
+                          {opt.text}
+                        </Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                </div>
+              ))}
+
+              <div className="flex gap-3">
+                <Button
+                  className="flex-1"
+                  style={{ backgroundColor: PURPLE, color: "#fff" }}
+                  disabled={assessmentAnswers.length !== assessmentQuestions.length}
+                  onClick={() => {
+                    // simple heuristic: pick the first suggested label set’s first option
+                    const pool: EmotionType[] = [];
+                    assessmentAnswers.forEach((ansIdx, qIdx) => {
+                      const opt = assessmentQuestions[qIdx].options[ansIdx];
+                      if (opt) pool.push(...(opt.emotions as EmotionType[]));
+                    });
+                    if (pool.length) setSelectedEmotion(pool[0]);
+                    setShowAssessment(false);
                   }}
                 >
-                  {q.options.map((opt, oIndex) => (
-                    <div key={oIndex} className="flex items-center space-x-2">
-                      <RadioGroupItem value={oIndex.toString()} id={`q${qIndex}o${oIndex}`} />
-                      <Label htmlFor={`q${qIndex}o${oIndex}`} className="text-sm">
-                        {opt.text}
-                      </Label>
-                    </div>
-                  ))}
-                </RadioGroup>
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Suggest Mood
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  style={{ borderColor: PURPLE, color: PURPLE }}
+                  onClick={() => (window.location.href = "/mindfulbot")}
+                >
+                  <HelpCircle className="w-4 h-4 mr-2" />
+                  Chat with Mindful Bot
+                </Button>
               </div>
-            ))}
-
-            <div className="flex gap-3">
-              <Button
-                className="flex-1"
-                style={{ backgroundColor: PURPLE, color: "#fff" }}
-                disabled={assessmentAnswers.length !== assessmentQuestions.length}
-                onClick={handleGenerateMoodFromAssessment}
-              >
-                <Sparkles className="w-4 h-4 mr-2" />
-                Generate Mood
-              </Button>
-              <Button
-                variant="outline"
-                className="flex-1"
-                style={{ borderColor: PURPLE, color: PURPLE }}
-                onClick={() => window.location.href = "/mindfulbot"}
-              >
-                <HelpCircle className="w-4 h-4 mr-2" />
-                Chat with Mindful Bot
-              </Button>
             </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  };
 
-      {/* Assessment Result Dialog */}
-      <Dialog open={showAssessmentResult} onOpenChange={setShowAssessmentResult}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Assessment Result</DialogTitle>
-            <DialogDescription>Based on your answers, here's your suggested mood</DialogDescription>
-          </DialogHeader>
-
-          {assessmentResult && (
-            <div className="text-center space-y-4">
-              {(() => {
-                const emotion = emotions.find(e => e.id === assessmentResult);
-                return emotion ? (
-                  <div className="space-y-4">
-                    <div className="text-6xl">{emotion.emoji}</div>
-                    <div>
-                      <h3 className="text-2xl font-bold" style={{ color: emotion.color }}>
-                        {emotion.name}
-                      </h3>
-                      <p className="text-sm text-gray-600 mt-2">
-                        This reflects your current emotional state based on the assessment
-                      </p>
-                    </div>
-                    <div className="flex gap-3">
-                      <Button
-                        onClick={() => {
-                          setSelectedEmotion(assessmentResult);
-                          setShowAssessmentResult(false);
-                        }}
-                        className="flex-1"
-                        style={{ backgroundColor: emotion.color, color: "#fff" }}
-                      >
-                        Log This Mood
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => setShowAssessmentResult(false)}
-                        className="flex-1"
-                      >
-                        Maybe Later
-                      </Button>
-                    </div>
-                  </div>
-                ) : null;
-              })()}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-    </div>
-  );
-};
 
 export default MoodTrackingPage;
