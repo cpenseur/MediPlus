@@ -87,7 +87,7 @@ const STAGE_LINES: string[] = [
 ];
 
 // ----- SEA-LION config (mini-game)
-const SEA_LION_KEY = "sk-______";
+const SEA_LION_KEY = "sk-TSbEBjqQN9HKMcutANxL5A";
 const SEA_LION_URL = "https://api.sea-lion.ai/v1/chat/completions";
 const SEA_LION_MODEL = "aisingapore/Llama-SEA-LION-v3-70B-IT";
 
@@ -277,7 +277,7 @@ const HomePage: React.FC = () => {
             <div className="flex flex-col sm:flex-row gap-4">
               <Button size="lg" className="text-lg px-8 py-4 shadow transition"
                       style={{ backgroundColor: PURPLE, color: "#fff" }}
-                      onClick={() => (window.location.href = "/mood")}>
+                      onClick={() => (window.location.href = "/moodtracker")}>
                 <Heart className="w-5 h-5 mr-2" /> Track Your Mood
               </Button>
               <Button size="lg" variant="outline" className="text-lg px-8 py-4 bg-white"
